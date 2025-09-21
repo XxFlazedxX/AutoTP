@@ -1,4 +1,4 @@
--- FLZ Smart TP Shoot GUI (Front by default; Behind ONLY when flying/zooming) + Auto GK + Rejoin Auto-Resume
+-- FLZ Smart TP Shoot GUI (Always TP Ahead in Target's Direction) + Auto GK + Rejoin Auto-Resume
 -- By Flazed
 
 local Players = game:GetService("Players")
@@ -40,7 +40,7 @@ end)
 -- GUI Elements
 local title = Instance.new("TextLabel", frame)
 title.Size = UDim2.new(1, 0, 0, 20)
-title.Text = "Flazed's And Live's AutoTP"
+title.Text = "Flazed's AutoTP"
 title.TextColor3 = Color3.new(1,1,1)
 title.BackgroundTransparency = 1
 title.Font = Enum.Font.GothamBold
@@ -119,56 +119,17 @@ local function getPredictedPosition(torso)
     return torso.Position + (vel * predictionTime)
 end
 
--- front/behind spacing based on speed; front by default
-local function chooseStuds(walkspeed, velocitySpeed)
-    local extra = math.clamp(velocitySpeed / 2, 0, 100)
-    if walkspeed == 16 then
-        return math.random(8,15) + extra, 0.15
-    elseif walkspeed == 50 then
-        return math.random(60,120) + extra, 0.20
-    elseif walkspeed == 100 then
-        return math.random(140,190) + extra, 0.33
-    else
-        return math.random(40,80) + extra, 0.20
-    end
+-- === NEW: Always-ahead leading distance (based on velocity & walk speed)
+local function leadDistance(velMag, walkSpeed)
+    -- scale with speed; clamp to sane range
+    local base = math.clamp(velMag * 0.6, 12, 180)
+    -- tiny bump for very fast walkers
+    if walkSpeed >= 50 then base = base + 25 end
+    if walkSpeed >= 100 then base = base + 45 end
+    return base
 end
 
-local function pressFOnce()
-    local ok1 = pcall(function()
-        StarterGui:SetCore("SendKeyEvent", true, Enum.KeyCode.F, false)
-        task.wait(0.05)
-        StarterGui:SetCore("SendKeyEvent", false, Enum.KeyCode.F, false)
-    end)
-    if ok1 then return end
-    local ok2 = pcall(function()
-        VIM:SendKeyEvent(true, Enum.KeyCode.F, false, game)
-        task.wait(0.05)
-        VIM:SendKeyEvent(false, Enum.KeyCode.F, false, game)
-    end)
-    if ok2 then return end
-    if typeof(keypress)=="function" and typeof(keyup)=="function" then
-        pcall(function() keypress(0x46) task.wait(0.05) keyup(0x46) end)
-    end
-end
-
--- ===== Detect “flying/zooming” (STRICT so front is used most of the time)
-local function isFlyingOrZooming(targetHum, targetHRP)
-    if not (targetHum and targetHRP) then return false end
-    local v = targetHRP.AssemblyLinearVelocity
-    local speed = v.Magnitude
-
-    -- stricter thresholds to avoid always-behind:
-    local veryFast = speed >= 120         -- truly zooming/launched
-    local bigVertical = math.abs(v.Y) >= 28
-    local airborne = (targetHum.FloorMaterial == Enum.Material.Air)
-
-    -- only treat airborne as "flying" if they're actually moving notably
-    local airborneMoving = airborne and (speed >= 45)
-
-    return veryFast or bigVertical or airborneMoving
-end
-
--- ===== TP logic (Front by default; Behind only when flying/zooming)
+-- === NEW: Always TP in the direction the target is going (no behind mode)
 local function tpOnly()
     if not targetPlayer then
         status.Text = "❌ No target"
@@ -183,31 +144,40 @@ local function tpOnly()
 
     if hrp and targetHRP and targetHum then
         local v = targetHRP.AssemblyLinearVelocity
-        local speed = v.Magnitude
+        local velMag = v.Magnitude
         local walkspeed = targetHum.WalkSpeed
 
-        local offset, delay = chooseStuds(walkspeed, speed)
-
-        local goBehind = isFlyingOrZooming(targetHum, targetHRP) -- STRICT condition
-        local dir = (goBehind and -1 or 1) * targetHRP.CFrame.LookVector
-
-        local tpPos = targetHRP.Position + (dir * offset)
-        if goBehind then
-            -- slight lift to avoid clipping when they’re airborne
-            tpPos += Vector3.new(0, 2.5, 0)
+        -- forward towards where they're going:
+        local forwardDir
+        if velMag >= 6 then
+            forwardDir = v.Unit
+        else
+            forwardDir = targetHRP.CFrame.LookVector
         end
 
-        hrp.CFrame = CFrame.new(tpPos, targetHRP.Position)
+        local ahead = leadDistance(velMag, walkspeed)
+
+        -- slightly raise if airborne & moving to avoid clipping
+        local liftY = 0
+        if targetHum.FloorMaterial == Enum.Material.Air and velMag >= 30 then
+            liftY = 2
+        end
+
+        -- bias towards predicted position to “stick” to path
+        local predicted = getPredictedPosition(targetHRP)
+        local tpPos = predicted + (forwardDir * ahead) + Vector3.new(0, liftY, 0)
+
+        -- face the same direction they’re heading
+        hrp.CFrame = CFrame.new(tpPos, tpPos + forwardDir)
 
         status.Text = string.format(
-            "%s TP'd %.0f studs (%s | Walk %.1f | Vel %.1f)",
-            goBehind and "🛩️ Behind" or "➡️ Front",
-            offset,
-            goBehind and "flying/zooming" or "normal",
-            walkspeed, speed
+            "➡️ Ahead %.0f studs (Walk %.1f | Vel %.1f)",
+            ahead, walkspeed, velMag
         )
 
-        return offset, delay
+        -- small shoot delay scales with speed; faster = slightly longer
+        local delay = math.clamp(velMag / 400, 0.12, 0.35)
+        return ahead, delay
     else
         status.Text = "❌ Missing HRP or Humanoid"
         return nil, nil
@@ -274,6 +244,25 @@ autoButton.MouseButton1Click:Connect(function()
     autoButton.Text = autoTP and "Auto TP Shoot: ON" or "Auto TP Shoot: OFF"
     lastShoot = tick()
 end)
+
+-- ===== GK keysender =====
+local function pressFOnce()
+    local ok1 = pcall(function()
+        StarterGui:SetCore("SendKeyEvent", true, Enum.KeyCode.F, false)
+        task.wait(0.05)
+        StarterGui:SetCore("SendKeyEvent", false, Enum.KeyCode.F, false)
+    end)
+    if ok1 then return end
+    local ok2 = pcall(function()
+        VIM:SendKeyEvent(true, Enum.KeyCode.F, false, game)
+        task.wait(0.05)
+        VIM:SendKeyEvent(false, Enum.KeyCode.F, false, game)
+    end)
+    if ok2 then return end
+    if typeof(keypress)=="function" and typeof(keyup)=="function" then
+        pcall(function() keypress(0x46) task.wait(0.05) keyup(0x46) end)
+    end
+end
 
 -- Auto GK toggle
 gkBtn.MouseButton1Click:Connect(function()
