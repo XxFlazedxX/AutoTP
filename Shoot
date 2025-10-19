@@ -1,21 +1,18 @@
--- FLZ Smart TP Shoot GUI (Always TP Ahead in Target's Direction) + Auto GK + Rejoin Auto-Resume
--- By Flazed
+-- FLZ Smart TP Shoot GUI with Velocity Boost, Directional, Jump TP, Circular Movement
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
-local VIM = game:GetService("VirtualInputManager")
 
--- ===== GUI =====
+-- GUI
 local gui = Instance.new("ScreenGui")
 gui.Name = "FLZ_SmartTP_GUI"
 gui.ResetOnSpawn = false
 gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 200, 0, 240)
-frame.Position = UDim2.new(0.5, -100, 0.5, -120)
+frame.Size = UDim2.new(0, 200, 0, 200)
+frame.Position = UDim2.new(0.5, -100, 0.5, -100)
 frame.BackgroundTransparency = 0.3
 frame.BackgroundColor3 = Color3.new(0,0,0)
 frame.Active = true
@@ -23,7 +20,7 @@ frame.Draggable = true
 frame.Visible = false
 
 local openButton = Instance.new("TextButton", gui)
-openButton.Size = UDim2.new(0, 120, 0, 30)
+openButton.Size = UDim2.new(0, 100, 0, 30)
 openButton.Position = UDim2.new(0, 20, 0.5, -15)
 openButton.Text = "Open TP GUI"
 openButton.TextColor3 = Color3.new(1,1,1)
@@ -40,7 +37,7 @@ end)
 -- GUI Elements
 local title = Instance.new("TextLabel", frame)
 title.Size = UDim2.new(1, 0, 0, 20)
-title.Text = "Flazed's AutoTP"
+title.Text = "ðŸ¤– Smart TP Shoot"
 title.TextColor3 = Color3.new(1,1,1)
 title.BackgroundTransparency = 1
 title.Font = Enum.Font.GothamBold
@@ -68,38 +65,21 @@ autoButton.Text = "Auto TP Shoot: OFF"
 autoButton.TextColor3 = Color3.new(1,1,1)
 autoButton.BackgroundColor3 = Color3.new(0.3,0.3,0.3)
 
--- Auto GK toggle (spams F every 0.5s when ON)
-local gkBtn = Instance.new("TextButton", frame)
-gkBtn.Size = UDim2.new(0, 180, 0, 24)
-gkBtn.Position = UDim2.new(0,10,0,115)
-gkBtn.Text = "Auto GK: OFF"
-gkBtn.TextColor3 = Color3.new(1,1,1)
-gkBtn.BackgroundColor3 = Color3.new(0.35,0.35,0.35)
-
 local status = Instance.new("TextLabel", frame)
 status.Size = UDim2.new(0, 180, 0, 80)
-status.Position = UDim2.new(0,10,0,145)
+status.Position = UDim2.new(0,10,0,115)
 status.Text = "Status: Idle"
 status.TextColor3 = Color3.new(1,1,1)
 status.BackgroundTransparency = 1
 status.TextScaled = true
 status.TextWrapped = true
 
--- ===== Vars =====
+-- Variables
 local targetPlayer = nil
 local autoTP = false
-local autoGK = false
 local lastShoot = 0
 
--- Rejoin tracking
-local targetQuery = nil         -- substring you typed to find the target
-local waitingForTarget = false  -- set when your target leaves
-
--- ===== Helpers =====
-local function charOf(plr) return plr and plr.Character end
-local function hrpOf(plr) local c=charOf(plr) return c and (c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Torso")) end
-local function humOf(plr) local c=charOf(plr) return c and c:FindFirstChildOfClass("Humanoid") end
-
+-- Helpers
 local function hasGrappleTool()
     local char = LocalPlayer.Character
     if not char then return nil end
@@ -108,122 +88,136 @@ local function hasGrappleTool()
             return tool
         end
     end
+    return nil
+end
+
+local function isGrappleAttached()
+    local tool = hasGrappleTool()
+    return tool and tool:FindFirstChild("Rope") and tool.Rope.Visible
 end
 
 local function getPredictedPosition(torso)
-    local lpHRP = hrpOf(LocalPlayer)
-    if not lpHRP then return torso.Position end
     local vel = torso.AssemblyLinearVelocity
-    local dist = (torso.Position - lpHRP.Position).Magnitude
+    local dist = (torso.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
     local predictionTime = math.clamp(dist / 200, 0.05, 1.5)
-    return torso.Position + (vel * predictionTime)
+    local predictedPos = torso.Position + (vel * predictionTime)
+
+    if math.abs(vel.Y) >= 5 then
+        predictedPos += Vector3.new(0, 5, 0)
+    end
+
+    return predictedPos
 end
 
--- === NEW: Always-ahead leading distance (based on velocity & walk speed)
-local function leadDistance(velMag, walkSpeed)
-    -- scale with speed; clamp to sane range
-    local base = math.clamp(velMag * 0.6, 12, 180)
-    -- tiny bump for very fast walkers
-    if walkSpeed >= 50 then base = base + 25 end
-    if walkSpeed >= 100 then base = base + 45 end
-    return base
+local function chooseStuds(walkspeed, velocitySpeed)
+    local extra = math.clamp(velocitySpeed / 2, 0, 100)
+    if velocitySpeed >= 90 then
+        return math.random(90,150), 0.400
+    elseif velocitySpeed == 0 then
+        return math.random(7,15), 0.275
+    elseif math.abs(walkspeed - 25) <= 2 or math.abs(velocitySpeed - 25) <= 2 then
+        return math.random(25,30), 0.275
+    elseif walkspeed == 16 then
+        return math.random(8,15) + extra, 0.275
+    elseif walkspeed == 50 then
+        return math.random(60,120) + extra, 0.275
+    elseif walkspeed == 100 then
+        return math.random(140,190) + extra, 0.275
+    else
+        return math.random(40,80) + extra, 0.275
+    end
 end
 
--- === NEW: Always TP in the direction the target is going (no behind mode)
+-- Main TP logic
 local function tpOnly()
     if not targetPlayer then
-        status.Text = "❌ No target"
+        status.Text = "âŒ No target"
         return nil, nil
     end
 
-    local lpChar = LocalPlayer.Character
-    local hrp = lpChar and lpChar:FindFirstChild("HumanoidRootPart")
-    local tChar = targetPlayer.Character
-    local targetHRP = tChar and tChar:FindFirstChild("HumanoidRootPart")
-    local targetHum = tChar and tChar:FindFirstChildOfClass("Humanoid")
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local targetChar = targetPlayer.Character
+    local targetHRP = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+    local targetHum = targetChar and targetChar:FindFirstChildOfClass("Humanoid")
 
     if hrp and targetHRP and targetHum then
-        local v = targetHRP.AssemblyLinearVelocity
-        local velMag = v.Magnitude
+        local velocity = targetHRP.AssemblyLinearVelocity
+        local velocitySpeed = velocity.Magnitude
         local walkspeed = targetHum.WalkSpeed
+        local offset, delay = chooseStuds(walkspeed, velocitySpeed)
 
-        -- forward towards where they're going:
-        local forwardDir
-        if velMag >= 6 then
-            forwardDir = v.Unit
+        local tpPos
+
+        if velocitySpeed >= 1 then
+            tpPos = targetHRP.Position + velocity.Unit * offset
+        elseif velocitySpeed < 17 then
+            local angle = tick() * 2
+            local radius = math.random(8, 15)
+            tpPos = targetHRP.Position + Vector3.new(
+                math.cos(angle) * radius,
+                0,
+                math.sin(angle) * radius
+            )
         else
-            forwardDir = targetHRP.CFrame.LookVector
+            tpPos = targetHRP.Position + (targetHRP.CFrame.LookVector * offset)
         end
 
-        local ahead = leadDistance(velMag, walkspeed)
-
-        -- slightly raise if airborne & moving to avoid clipping
-        local liftY = 0
-        if targetHum.FloorMaterial == Enum.Material.Air and velMag >= 30 then
-            liftY = 2
+        -- Only if target is jumping (Y velocity â‰¥ 5)
+        if math.abs(velocity.Y) >= 5 then
+            tpPos = tpPos + Vector3.new(0, math.random(10, 20), 0)
         end
 
-        -- bias towards predicted position to “stick” to path
-        local predicted = getPredictedPosition(targetHRP)
-        local tpPos = predicted + (forwardDir * ahead) + Vector3.new(0, liftY, 0)
+        hrp.CFrame = CFrame.new(tpPos, targetHRP.Position)
+        status.Text = string.format("âœ… TP'd %.0f studs (Walk %.1f | Vel %.1f)", offset, walkspeed, velocitySpeed)
 
-        -- face the same direction they’re heading
-        hrp.CFrame = CFrame.new(tpPos, tpPos + forwardDir)
-
-        status.Text = string.format(
-            "➡️ Ahead %.0f studs (Walk %.1f | Vel %.1f)",
-            ahead, walkspeed, velMag
-        )
-
-        -- small shoot delay scales with speed; faster = slightly longer
-        local delay = math.clamp(velMag / 400, 0.12, 0.35)
-        return ahead, delay
+        return offset, delay
     else
-        status.Text = "❌ Missing HRP or Humanoid"
+        status.Text = "âŒ Missing HRP or Humanoid"
         return nil, nil
     end
 end
 
 local function shootOnly()
     if not targetPlayer then return end
-    local tChar = targetPlayer.Character
-    local targetHRP = tChar and tChar:FindFirstChild("HumanoidRootPart")
+    local targetChar = targetPlayer.Character
+    local targetHRP = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
     if targetHRP then
         local tool = hasGrappleTool()
-        if tool and tool:FindFirstChild("RemoteEvent") then
+        if tool then
             local aimPos = getPredictedPosition(targetHRP)
             tool.RemoteEvent:FireServer(aimPos)
             status.Text = status.Text .. " & Shot"
+
+            if isGrappleAttached() then
+                status.Text = status.Text .. " | Grappled (auto off)"
+                autoTP = false
+                autoButton.Text = "Auto TP Shoot: OFF"
+            end
         end
     end
 end
 
--- ===== Buttons =====
-local function acquireTarget(name)
-    local lname = name:lower()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and (p.Name:lower():find(lname) or p.DisplayName:lower():find(lname)) then
-            return p
-        end
-    end
-end
-
+-- Buttons
 toggleButton.MouseButton1Click:Connect(function()
-    local name = nameBox.Text
-    if name == "" then
-        status.Text = "⚠️ Enter name"
+    local name = nameBox.Text:lower()
+    if name ~= "" then
+        for _, p in pairs(Players:GetPlayers()) do
+            if p.Name:lower():find(name) or p.DisplayName:lower():find(name) then
+                targetPlayer = p
+                status.Text = "âœ… Target: "..p.Name
+                break
+            end
+        end
+        if not targetPlayer then
+            status.Text = "âŒ Target not found"
+            return
+        end
+    else
+        status.Text = "âš ï¸ Enter name"
         return
     end
-    targetPlayer = acquireTarget(name)
-    targetQuery = name:lower()
-    waitingForTarget = false
 
-    if not targetPlayer then
-        status.Text = "❌ Target not found"
-        return
-    end
-
-    status.Text = "✅ Target: " .. targetPlayer.Name
     local studs, delay = tpOnly()
     if studs and delay then
         task.wait(delay)
@@ -232,12 +226,8 @@ toggleButton.MouseButton1Click:Connect(function()
 end)
 
 autoButton.MouseButton1Click:Connect(function()
-    if nameBox.Text ~= "" and not targetPlayer then
-        targetPlayer = acquireTarget(nameBox.Text)
-        if targetPlayer then targetQuery = nameBox.Text:lower() end
-    end
     if not targetPlayer then
-        status.Text = "⚠️ No target for auto"
+        status.Text = "âš ï¸ No target for auto"
         return
     end
     autoTP = not autoTP
@@ -245,75 +235,10 @@ autoButton.MouseButton1Click:Connect(function()
     lastShoot = tick()
 end)
 
--- ===== GK keysender =====
-local function pressFOnce()
-    local ok1 = pcall(function()
-        StarterGui:SetCore("SendKeyEvent", true, Enum.KeyCode.F, false)
-        task.wait(0.05)
-        StarterGui:SetCore("SendKeyEvent", false, Enum.KeyCode.F, false)
-    end)
-    if ok1 then return end
-    local ok2 = pcall(function()
-        VIM:SendKeyEvent(true, Enum.KeyCode.F, false, game)
-        task.wait(0.05)
-        VIM:SendKeyEvent(false, Enum.KeyCode.F, false, game)
-    end)
-    if ok2 then return end
-    if typeof(keypress)=="function" and typeof(keyup)=="function" then
-        pcall(function() keypress(0x46) task.wait(0.05) keyup(0x46) end)
-    end
-end
-
--- Auto GK toggle
-gkBtn.MouseButton1Click:Connect(function()
-    autoGK = not autoGK
-    gkBtn.Text = autoGK and "Auto GK: ON" or "Auto GK: OFF"
-    status.Text = autoGK and "☠️ Auto GK: spamming F (0.5s)" or "🛑 Auto GK: stopped"
-end)
-
--- Auto GK spammer (every 0.5s while ON)
-local acc = 0
-RunService.Heartbeat:Connect(function(dt)
-    if autoGK then
-        acc += dt
-        if acc >= 0.5 then
-            pressFOnce()
-            acc = 0
-        end
-    else
-        acc = 0
-    end
-end)
-
--- ===== Rejoin auto-resume: re-acquire target & turn Auto TP ON
-Players.PlayerRemoving:Connect(function(plr)
-    if targetPlayer and plr == targetPlayer then
-        waitingForTarget = true
-        status.Text = "⏳ "..plr.Name.." left. Waiting to rejoin…"
-        targetPlayer = nil
-    end
-end)
-
-Players.PlayerAdded:Connect(function(plr)
-    if waitingForTarget and targetQuery then
-        local q = targetQuery
-        local match = (plr.Name:lower():find(q) ~= nil) or (plr.DisplayName:lower():find(q) ~= nil)
-        if match then
-            targetPlayer = plr
-            waitingForTarget = false
-            autoTP = true
-            autoButton.Text = "Auto TP Shoot: ON"
-            lastShoot = 0
-            status.Text = "✅ "..plr.Name.." rejoined — Auto TP ON"
-        end
-    end
-end)
-
--- ===== Auto loop =====
 RunService.RenderStepped:Connect(function()
     if autoTP and targetPlayer then
         local studs, delay = tpOnly()
-        if studs and (tick() - lastShoot >= (delay or 0.2)) then
+        if studs and (tick() - lastShoot >= delay) then
             shootOnly()
             lastShoot = tick()
         end
